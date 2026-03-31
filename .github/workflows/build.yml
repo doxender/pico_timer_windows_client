@@ -38,6 +38,10 @@ jobs:
       - name: Build installer
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\setup.iss
+          # Fallback: winget installs to LocalAppData on some runners
+          if (-not $?) {
+            & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\setup.iss
+          }
         shell: pwsh
 
       - name: Upload installer artifact
