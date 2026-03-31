@@ -37,7 +37,11 @@ public class MainForm : Form
         _autoRefresh.Start();
 
         // Scan on startup
-        Load += async (_, _) => await ScanAsync();
+        Load += async (_, _) =>
+        {
+            Log.Info("Application started");
+            await ScanAsync();
+        };
     }
 
     // ── Layout ─────────────────────────────────────────────────────────────
@@ -45,39 +49,48 @@ public class MainForm : Form
     {
         var toolbar = new Panel
         {
-            Dock    = DockStyle.Top,
-            Height  = 40,
-            Padding = new Padding(6, 6, 6, 0),
+            Dock   = DockStyle.Top,
+            Height = 40,
         };
 
-        // ── App name / version — upper left ───────────────────────────────
+        // ── Buttons panel docked to the right ─────────────────────────────
+        var btnPanel = new Panel { Dock = DockStyle.Right, Width = 190 };
+
+        var btnSettings = MkButton("Settings", 80, OnOpenSettings);
+        var btnScan     = MkButton("Scan Now", 90, async (_, _) => await ScanAsync());
+
+        btnSettings.Location = new Point(100, 6);
+        btnScan.Location     = new Point(4,   6);
+
+        btnPanel.Controls.Add(btnScan);
+        btnPanel.Controls.Add(btnSettings);
+
+        // ── App name docked to the left ───────────────────────────────────
         var lblAppName = new Label
         {
             Text      = "BoatTron Monitor  v2.6",
-            Location  = new Point(8, 10),
-            AutoSize  = true,
+            Dock      = DockStyle.Left,
+            Width     = 220,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding   = new Padding(8, 0, 0, 0),
             Font      = new Font("Segoe UI", 11, FontStyle.Bold),
-            ForeColor = Color.FromArgb(26, 58, 106),   // dark navy
+            ForeColor = Color.FromArgb(26, 58, 106),
         };
 
-        var btnScan     = MkButton("Scan Now",  90, async (_, _) => await ScanAsync());
-        var btnSettings = MkButton("Settings",  80, OnOpenSettings);
-
-        btnScan.Location     = new Point(200, 6);
-        btnSettings.Location = new Point(298, 6);
-
+        // ── Status label fills the middle ─────────────────────────────────
         lblStatus = new Label
         {
-            Location  = new Point(390, 10),
-            AutoSize  = true,
+            Dock      = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding   = new Padding(8, 0, 0, 0),
             ForeColor = Color.Gray,
             Font      = new Font("Segoe UI", 9),
         };
 
-        toolbar.Controls.Add(lblAppName);
-        toolbar.Controls.Add(btnScan);
-        toolbar.Controls.Add(btnSettings);
+        // Add in reverse dock order: right first, then left, then fill
         toolbar.Controls.Add(lblStatus);
+        toolbar.Controls.Add(btnPanel);
+        toolbar.Controls.Add(lblAppName);
         Controls.Add(toolbar);
     }
 
@@ -121,6 +134,7 @@ public class MainForm : Form
         if (_scanning) return;
         _scanning = true;
         SetStatus("Scanning...");
+        Log.Info("Scan started");
 
         try
         {
@@ -129,11 +143,13 @@ public class MainForm : Form
         }
         catch (Exception ex)
         {
+            Log.Error("Scan failed", ex);
             SetStatus($"Scan error: {ex.Message}");
         }
         finally
         {
             _scanning = false;
+            Log.Info("Scan finished");
         }
     }
 

@@ -25,6 +25,8 @@ public static class DeviceClient
     {
         var results = new List<DeviceInfo>();
 
+        Log.Info($"Discovery: broadcasting BOATRON_DISCOVER on UDP port {udpPort}");
+
         using var udp = new UdpClient();
         udp.EnableBroadcast = true;
 
@@ -32,15 +34,14 @@ public static class DeviceClient
         var endpoint = new IPEndPoint(IPAddress.Broadcast, udpPort);
         await udp.SendAsync(msg, msg.Length, endpoint);
 
-        var deadline = DateTime.UtcNow.AddSeconds(2);
-        while (DateTime.UtcNow < deadline)
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (true)
         {
-            int remaining = Math.Max(1, (int)(deadline - DateTime.UtcNow).TotalMilliseconds);
-            udp.Client.ReceiveTimeout = remaining;
             try
             {
-                var result = await udp.ReceiveAsync();
+                var result = await udp.ReceiveAsync(cts.Token);
                 var json   = Encoding.UTF8.GetString(result.Buffer);
+                Log.Info($"Discovery: response from {result.RemoteEndPoint.Address}: {json}");
                 var info   = JsonSerializer.Deserialize<DeviceInfo>(json, JsonOpts);
                 if (info != null)
                 {
@@ -48,10 +49,12 @@ public static class DeviceClient
                     results.Add(info);
                 }
             }
-            catch (SocketException) { break; }
-            catch { /* skip malformed responses */ }
+            catch (OperationCanceledException) { break; }
+            catch (SocketException ex)         { Log.Warn($"Discovery: socket error: {ex.Message}"); break; }
+            catch (Exception ex)               { Log.Warn($"Discovery: skipping malformed response: {ex.Message}"); }
         }
 
+        Log.Info($"Discovery: found {results.Count} device(s)");
         return results;
     }
 
@@ -59,32 +62,40 @@ public static class DeviceClient
 
     public static async Task<DeviceInfo> GetInfoAsync(string ip)
     {
-        var json = await Http.GetStringAsync($"http://{ip}/api/info");
-        var info = JsonSerializer.Deserialize<DeviceInfo>(json, JsonOpts)
-                   ?? throw new InvalidOperationException("Empty response from device.");
-        info.IP = ip;
-        return info;
+        Log.Info($"GET /api/info from {ip}");
+        try
+        {
+            var json = await Http.GetStringAsync($"http://{ip}/api/info");
+            var info = JsonSerializer.Deserialize<DeviceInfo>(json, JsonOpts)
+                       ?? throw new InvalidOperationException("Empty response from device.");
+            info.IP = ip;
+            return info;
+        }
+        catch (Exception ex) { Log.Error($"GET /api/info from {ip} failed", ex); throw; }
     }
 
     public static async Task<DeviceInfo> PostConfigAsync(string ip, object payload)
     {
-        var body = new StringContent(
-            JsonSerializer.Serialize(payload),
-            Encoding.UTF8,
-            "application/json");
+        var payloadJson = JsonSerializer.Serialize(payload);
+        Log.Info($"POST /api/config to {ip}: {payloadJson}");
+        try
+        {
+            var body = new StringContent(payloadJson, Encoding.UTF8, "application/json");
+            var resp = await Http.PostAsync($"http://{ip}/api/config", body);
+            resp.EnsureSuccessStatusCode();
 
-        var resp = await Http.PostAsync($"http://{ip}/api/config", body);
-        resp.EnsureSuccessStatusCode();
-
-        var json = await resp.Content.ReadAsStringAsync();
-        var info = JsonSerializer.Deserialize<DeviceInfo>(json, JsonOpts)
-                   ?? throw new InvalidOperationException("Empty response from device.");
-        info.IP = ip;
-        return info;
+            var json = await resp.Content.ReadAsStringAsync();
+            var info = JsonSerializer.Deserialize<DeviceInfo>(json, JsonOpts)
+                       ?? throw new InvalidOperationException("Empty response from device.");
+            info.IP = ip;
+            return info;
+        }
+        catch (Exception ex) { Log.Error($"POST /api/config to {ip} failed", ex); throw; }
     }
 
     public static async Task RebootAsync(string ip)
     {
+        Log.Info($"POST /api/reboot to {ip}");
         var body = new StringContent("{}", Encoding.UTF8, "application/json");
         await Http.PostAsync($"http://{ip}/api/reboot", body);
     }
