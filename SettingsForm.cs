@@ -1,4 +1,5 @@
-// SettingsForm.cs — client-side settings: AP password hash, UDP port
+// SettingsForm.cs — client-side settings: AP hotspot password
+// Access: right-click the main window → Settings
 
 using System.Drawing;
 using System.Windows.Forms;
@@ -7,9 +8,8 @@ namespace BoatTronClient;
 
 public class SettingsForm : Form
 {
-    private readonly TextBox  _tbApPass;
-    private readonly TextBox  _tbUdpPort;
-    private readonly ClientSettings _settings;
+    private readonly TextBox         _tbApPass;
+    private readonly ClientSettings  _settings;
 
     public SettingsForm(ClientSettings settings)
     {
@@ -20,20 +20,50 @@ public class SettingsForm : Form
         StartPosition   = FormStartPosition.CenterParent;
         MaximizeBox     = false;
         MinimizeBox     = false;
-        ClientSize      = new Size(400, 180);
+        ClientSize      = new Size(420, 170);
 
-        _tbApPass  = new TextBox { PasswordChar = '*', Width = 220, MaxLength = 64, Location = new Point(140, 20) };
-        _tbUdpPort = new TextBox { Width = 80, Text = settings.UdpPort.ToString(), Location = new Point(140, 60) };
+        // ── Explanation label ──────────────────────────────────────────────
+        Controls.Add(new Label
+        {
+            Text      = "The AP hotspot password is used when this app connects\n" +
+                        "to a BoatTron device's WiFi access point for setup.",
+            Location  = new Point(12, 14),
+            Size      = new Size(396, 38),
+            Font      = new Font("Segoe UI", 8.5f),
+            ForeColor = Color.Gray,
+        });
 
-        Controls.Add(MkLabel("AP password:",  12, 23));
-        Controls.Add(MkLabel("UDP port:",     12, 63));
-        Controls.Add(MkLabel("(leave blank to keep current)", 140, 44, 240, Color.Gray, 8));
+        // ── Password row ───────────────────────────────────────────────────
+        Controls.Add(MkLabel("Hotspot password:", 12, 66));
+        _tbApPass = new TextBox
+        {
+            PasswordChar = '*',
+            Width        = 220,
+            MaxLength    = 64,
+            Location     = new Point(150, 63),
+        };
         Controls.Add(_tbApPass);
-        Controls.Add(_tbUdpPort);
+        Controls.Add(new Label
+        {
+            Text      = "(leave blank to keep current)",
+            Location  = new Point(150, 86),
+            Width     = 240,
+            ForeColor = Color.Gray,
+            Font      = new Font("Segoe UI", 8),
+        });
 
-        var btnSave      = new Button { Text = "Save",      Location = new Point(220, 110), Width = 80, Height = 28 };
-        var btnCancel    = new Button { Text = "Cancel",    Location = new Point(308, 110), Width = 80, Height = 28, DialogResult = DialogResult.Cancel };
-        var btnUninstall = new Button { Text = "Uninstall", Location = new Point(12,  110), Width = 90, Height = 28, ForeColor = System.Drawing.Color.DarkRed };
+        // ── Buttons ────────────────────────────────────────────────────────
+        var btnSave   = new Button { Text = "Save",        Location = new Point(230, 126), Width = 80, Height = 28 };
+        var btnCancel = new Button { Text = "Cancel",      Location = new Point(318, 126), Width = 80, Height = 28, DialogResult = DialogResult.Cancel };
+        var btnUninstall = new Button
+        {
+            Text      = "Uninstall…",
+            Location  = new Point(12, 126),
+            Width     = 90,
+            Height    = 28,
+            ForeColor = Color.DarkRed,
+        };
+
         btnSave.Click      += OnSave;
         btnUninstall.Click += OnUninstall;
         CancelButton        = btnCancel;
@@ -44,20 +74,11 @@ public class SettingsForm : Form
 
     private void OnSave(object? s, EventArgs e)
     {
-        if (!int.TryParse(_tbUdpPort.Text.Trim(), out int port) || port < 1024 || port > 65535)
-        {
-            MessageBox.Show("UDP port must be 1024–65535.", "Invalid",
-                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
         var newPass = _tbApPass.Text;
         if (!string.IsNullOrEmpty(newPass))
             _settings.ApPassHash = ClientSettings.HashPassword(newPass);
 
-        _settings.UdpPort = port;
         _settings.Save();
-
         DialogResult = DialogResult.OK;
         Close();
     }
@@ -74,17 +95,16 @@ public class SettingsForm : Form
 
         if (result != DialogResult.Yes) return;
 
-        // Locate uninstall.bat in the same directory as the running exe
-        var exeDir     = AppContext.BaseDirectory;
-        var batPath    = Path.Combine(exeDir, "uninstall.bat");
-        var uninstExe  = Path.Combine(exeDir, "unins000.exe");   // Inno Setup default name
+        var exeDir    = AppContext.BaseDirectory;
+        var batPath   = Path.Combine(exeDir, "uninstall.bat");
+        var uninstExe = Path.Combine(exeDir, "unins000.exe");
 
         if (File.Exists(batPath))
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
-                FileName  = batPath,
-                UseShellExecute = true,   // opens in a visible console window
+                FileName        = batPath,
+                UseShellExecute = true,
             });
         }
         else if (File.Exists(uninstExe))
@@ -98,20 +118,17 @@ public class SettingsForm : Form
             return;
         }
 
-        // Exit the app — the uninstaller will kill us anyway
         Application.Exit();
     }
 
-    private static Label MkLabel(string text, int x, int y,
-                                  int width = 120, Color? color = null, float size = 9f)
+    private static Label MkLabel(string text, int x, int y)
     {
         return new Label
         {
             Text      = text,
-            Location  = new Point(x, y),
-            Width     = width,
-            Font      = new Font("Segoe UI", size),
-            ForeColor = color ?? SystemColors.ControlText,
+            Location  = new Point(x, y + 3),
+            Width     = 134,
+            Font      = new Font("Segoe UI", 9),
             TextAlign = System.Drawing.ContentAlignment.MiddleRight,
         };
     }

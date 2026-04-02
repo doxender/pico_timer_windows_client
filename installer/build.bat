@@ -15,15 +15,26 @@ if "%CONFIG%"=="" set CONFIG=release
 
 set APP_DIR=%~dp0..
 set DIST_DIR=%APP_DIR%\dist
-set ISCC="C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 
-:: Allow override of ISCC path via environment
+:: Try default Inno Setup install locations
+set ISCC="C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+if not exist %ISCC% set ISCC="%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"
+:: Allow override via environment
 if not "%ISCC_PATH%"=="" set ISCC="%ISCC_PATH%"
 
 echo.
 echo ╔══════════════════════════════════════════════════════╗
 echo ║   DigiTron Sensors — BoatTron Manager Build         ║
 echo ╚══════════════════════════════════════════════════════╝
+echo.
+
+:: ── Bump version ────────────────────────────────────────────────────────────
+echo [0/2] Bumping version...
+powershell -ExecutionPolicy Bypass -File "%~dp0bump_version.ps1"
+if %ERRORLEVEL% neq 0 (
+    echo ERROR: Version bump failed.
+    exit /b 1
+)
 echo.
 
 :: ── Check dotnet SDK ────────────────────────────────────────────────────────

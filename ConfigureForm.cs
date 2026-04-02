@@ -10,7 +10,6 @@ public class ConfigureForm : Form
     // ── Shared fields ──────────────────────────────────────────────────────
     private readonly TextBox   _tbName;
     private readonly TextBox   _tbApPass;
-    private readonly TextBox   _tbUdpPort;
     private readonly CheckBox  _cbStandalone;
 
     // Network-only fields
@@ -34,21 +33,21 @@ public class ConfigureForm : Form
     {
         _info = info;
 
-        Text            = $"Configure — {info.Name}";
+        // Title shows the device's fixed hardware identity, not just the user name
+        Text            = $"Configure — {info.Brand}-{info.DeviceTag}";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition   = FormStartPosition.CenterParent;
         MaximizeBox     = false;
         MinimizeBox     = false;
-        ClientSize      = new Size(500, 320);
+        ClientSize      = new Size(520, 430);
 
         // ── Shared control instances ───────────────────────────────────────
-        _tbName       = new TextBox { Text = info.Name, Width = 240, MaxLength = 32 };
-        _tbApPass     = new TextBox { PasswordChar = '*', Width = 240, MaxLength = 64 };
-        _tbUdpPort    = new TextBox { Text = info.UdpPort.ToString(), Width = 80 };
-        _cbStandalone = new CheckBox { Text = "Standalone (always AP mode)", Checked = info.Standalone };
+        _tbName       = new TextBox { Text = info.Name, Width = 260, MaxLength = 32 };
+        _tbApPass     = new TextBox { PasswordChar = '*', Width = 260, MaxLength = 64 };
+        _cbStandalone = new CheckBox { Text = "Standalone mode (always stay in AP/hotspot mode)", Checked = info.Standalone };
         _cbSsid       = new ComboBox { Text = info.WifiSsid, Width = 200, DropDownStyle = ComboBoxStyle.DropDown };
-        _tbWifiPass   = new TextBox { PasswordChar = '*', Width = 240, MaxLength = 64 };
-        _btnScan      = new Button  { Text = "Scan", Width = 60, Height = 23 };
+        _tbWifiPass   = new TextBox { PasswordChar = '*', Width = 260, MaxLength = 64 };
+        _btnScan      = new Button  { Text = "Scan", Width = 60, Height = 26 };
         _btnScan.Click += OnScanSsids;
 
         // ── Tabs ───────────────────────────────────────────────────────────
@@ -67,14 +66,14 @@ public class ConfigureForm : Form
         var btnPanel = new FlowLayoutPanel
         {
             Dock          = DockStyle.Bottom,
-            Height        = 44,
+            Height        = 50,
             FlowDirection = FlowDirection.RightToLeft,
-            Padding       = new Padding(8, 6, 8, 0),
+            Padding       = new Padding(8, 8, 8, 0),
         };
 
-        var btnSave   = new Button { Text = "Save",   Width = 80, Height = 28 };
-        var btnCancel = new Button { Text = "Cancel", Width = 80, Height = 28, DialogResult = DialogResult.Cancel };
-        var btnReboot = new Button { Text = "Reboot", Width = 80, Height = 28 };
+        var btnSave   = new Button { Text = "Save",   Width = 88, Height = 30 };
+        var btnCancel = new Button { Text = "Cancel", Width = 88, Height = 30, DialogResult = DialogResult.Cancel };
+        var btnReboot = new Button { Text = "Reboot", Width = 88, Height = 30 };
 
         btnSave.Click   += OnSave;
         btnReboot.Click += OnReboot;
@@ -93,54 +92,58 @@ public class ConfigureForm : Form
     private void BuildApTab()
     {
         var f = _apTab;
-        int y = 16;
+        int y = 20;
 
-        // All tabs have identical fields per spec — AP tab shows the shared controls
-        AddRow(f, "Device name:", _tbName,       ref y);
-        AddRow(f, "AP password:", _tbApPass,     ref y);
-        AddHint(f, "(leave blank to keep current)", ref y);
-        AddRow(f, "UDP port:",    _tbUdpPort,    ref y);
-        y += 4;
-        _cbStandalone.Location = new Point(130, y);
+        AddRow(f, "Device name:", _tbName,   ref y);
+        y += 8;
+
+        // Hotspot password — "AP" is jargon; use plain language
+        AddRow(f, "Hotspot password:", _tbApPass, ref y);
+        AddHint(f, "(leave blank to keep the current password)", ref y);
+        y += 8;
+
+        _cbStandalone.Location = new Point(140, y);
+        _cbStandalone.Width    = 340;
         f.Controls.Add(_cbStandalone);
     }
 
     private void BuildLanTab()
     {
-        var f  = _lanTab;
-        int y  = 16;
+        var f = _lanTab;
+        int y = 20;
 
-        // Name — shares the same TextBox instance
+        // Name — shares the same TextBox instance as AP tab
         AddRow(f, "Device name:", _tbName, ref y);
+        y += 8;
 
         // SSID row: combobox + scan button side by side
-        var ssidPanel = new Panel { Width = 280, Height = 24, Location = new Point(130, y) };
+        var ssidPanel = new Panel { Width = 290, Height = 26, Location = new Point(140, y) };
         _cbSsid.Location  = new Point(0, 0);
         _btnScan.Location = new Point(_cbSsid.Width + 4, 0);
         ssidPanel.Controls.Add(_cbSsid);
         ssidPanel.Controls.Add(_btnScan);
-        AddLabel(f, "WiFi SSID:", y);
+        AddLabel(f, "WiFi network:", y);
         f.Controls.Add(ssidPanel);
-        y += 32;
+        y += 44;
 
         AddRow(f, "WiFi password:", _tbWifiPass, ref y);
+        y += 8;
 
-        // AP password — same TextBox instance as AP tab
-        AddRow(f, "AP password:",   _tbApPass,   ref y);
-        AddHint(f, "(leave blank to keep current)", ref y);
+        AddRow(f, "Hotspot password:", _tbApPass, ref y);
+        AddHint(f, "(leave blank to keep the current password)", ref y);
+        y += 8;
 
-        AddRow(f, "UDP port:",      _tbUdpPort,  ref y);
-        y += 4;
-        _cbStandalone.Location = new Point(130, y);
+        _cbStandalone.Location = new Point(140, y);
+        _cbStandalone.Width    = 340;
         f.Controls.Add(_cbStandalone);
     }
 
     private static void AddRow(Control parent, string label, Control ctl, ref int y)
     {
         AddLabel(parent, label, y);
-        ctl.Location = new Point(130, y);
+        ctl.Location = new Point(140, y);
         parent.Controls.Add(ctl);
-        y += 32;
+        y += 44;
     }
 
     private static void AddLabel(Control parent, string text, int y)
@@ -149,7 +152,7 @@ public class ConfigureForm : Form
         {
             Text      = text,
             Location  = new Point(12, y + 3),
-            Width     = 114,
+            Width     = 124,
             TextAlign = System.Drawing.ContentAlignment.MiddleRight,
             Font      = new Font("Segoe UI", 9),
         });
@@ -160,8 +163,8 @@ public class ConfigureForm : Form
         parent.Controls.Add(new Label
         {
             Text      = text,
-            Location  = new Point(130, y - 26),
-            Width     = 280,
+            Location  = new Point(140, y - 38),
+            Width     = 340,
             ForeColor = System.Drawing.Color.Gray,
             Font      = new Font("Segoe UI", 8),
         });
@@ -173,7 +176,8 @@ public class ConfigureForm : Form
         _btnScan.Enabled = false;
         try
         {
-            var ssids = await WifiManager.ScanSsidsAsync();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+        var ssids = await WifiManager.ScanSsidsAsync(ct: cts.Token);
             _cbSsid.Items.Clear();
             _cbSsid.Items.AddRange(ssids.Cast<object>().ToArray());
         }
@@ -196,17 +200,9 @@ public class ConfigureForm : Form
             return;
         }
 
-        if (!int.TryParse(_tbUdpPort.Text.Trim(), out int port) || port < 1024 || port > 65535)
-        {
-            MessageBox.Show("UDP port must be 1024–65535.", "Invalid",
-                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
         var updates = new Dictionary<string, object>
         {
             ["name"]       = name,
-            ["udp_port"]   = port,
             ["standalone"] = _cbStandalone.Checked,
         };
 

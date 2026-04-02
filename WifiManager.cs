@@ -2,6 +2,7 @@
 // netsh wlan operations do not require elevation for user-scope profiles.
 
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace BoatTronClient;
@@ -11,25 +12,103 @@ public class WifiManager
     private string? _savedSsid;
 
     // ── SSID scan ──────────────────────────────────────────────────────────
+    // Triggers an active hardware sweep via WlanScan(), waits for it to
+    // complete, then polls netsh every second for new SSIDs.  Runs until
+    // the CancellationToken is cancelled (Stop button or AP found).
 
-    public static async Task<List<string>> ScanSsidsAsync()
+    public static async Task<List<string>> ScanSsidsAsync(
+        IProgress<string>? progress = null,
+        Action<int>? onPollComplete = null,
+        CancellationToken ct = default)
     {
-        var output = await RunNetshAsync("wlan show networks mode=bssid");
-        var ssids  = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var all  = new List<string>();
 
-        foreach (var line in output.Split('\n'))
+        // Trigger an immediate hardware channel sweep and wait for it.
+        // WlanScan() commands the adapter directly — unlike netsh which
+        // only reads the stale cache.
+        await TriggerWlanScanAsync(ct);
+
+        while (!ct.IsCancellationRequested)
         {
-            // Match "SSID 1 : MyNetwork" but not "BSSID 1 : ..."
-            var m = Regex.Match(line, @"^\s*SSID\s+\d+\s*:\s*(.+)$");
-            if (m.Success)
+            var output      = await RunNetshAsync("wlan show networks mode=bssid");
+            int newThisPoll = 0;
+
+            foreach (var line in output.Split('\n'))
             {
-                var ssid = m.Groups[1].Value.Trim();
-                if (!string.IsNullOrEmpty(ssid))
-                    ssids.Add(ssid);
+                // Match "SSID 1 : MyNetwork" but not "BSSID 1 : ..."
+                var m = Regex.Match(line, @"^\s*SSID\s+\d+\s*:\s*(.+)$");
+                if (m.Success)
+                {
+                    var ssid = m.Groups[1].Value.Trim();
+                    if (!string.IsNullOrEmpty(ssid) && seen.Add(ssid))
+                    {
+                        all.Add(ssid);
+                        newThisPoll++;
+                        progress?.Report(ssid);
+                    }
+                }
             }
+
+            onPollComplete?.Invoke(newThisPoll);
+
+            try { await Task.Delay(1000, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { break; }
         }
 
-        return ssids.Distinct().ToList();
+        return all;
+    }
+
+    // ── WlanScan P/Invoke ─────────────────────────────────────────────────
+
+    [DllImport("wlanapi.dll", SetLastError = true)]
+    private static extern uint WlanOpenHandle(
+        uint dwClientVersion, IntPtr pReserved,
+        out uint pdwNegotiatedVersion, out IntPtr phClientHandle);
+
+    [DllImport("wlanapi.dll", SetLastError = true)]
+    private static extern uint WlanCloseHandle(IntPtr hClientHandle, IntPtr pReserved);
+
+    [DllImport("wlanapi.dll", SetLastError = true)]
+    private static extern uint WlanEnumInterfaces(
+        IntPtr hClientHandle, IntPtr pReserved, out IntPtr ppInterfaceList);
+
+    [DllImport("wlanapi.dll", SetLastError = true)]
+    private static extern uint WlanScan(
+        IntPtr hClientHandle, ref Guid pInterfaceGuid,
+        IntPtr pDot11Ssid, IntPtr pIeData, IntPtr pReserved);
+
+    [DllImport("wlanapi.dll")]
+    private static extern void WlanFreeMemory(IntPtr pMemory);
+
+    private static async Task TriggerWlanScanAsync(CancellationToken ct)
+    {
+        await Task.Run(() =>
+        {
+            if (WlanOpenHandle(2, IntPtr.Zero, out _, out var handle) != 0) return;
+            try
+            {
+                if (WlanEnumInterfaces(handle, IntPtr.Zero, out var listPtr) != 0) return;
+                try
+                {
+                    // WLAN_INTERFACE_INFO_LIST: dwNumberOfItems (4) + dwIndex (4) + items
+                    int count = Marshal.ReadInt32(listPtr);
+                    IntPtr itemPtr = listPtr + 8; // skip header
+                    for (int i = 0; i < count; i++)
+                    {
+                        var guid = Marshal.PtrToStructure<Guid>(itemPtr);
+                        WlanScan(handle, ref guid, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+                        itemPtr += 532; // sizeof(WLAN_INTERFACE_INFO)
+                    }
+                }
+                finally { WlanFreeMemory(listPtr); }
+            }
+            finally { WlanCloseHandle(handle, IntPtr.Zero); }
+        }, ct);
+
+        // Give the adapter ~2 s to complete the channel sweep
+        try { await Task.Delay(2000, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
     }
 
     // ── Connect to AP ──────────────────────────────────────────────────────

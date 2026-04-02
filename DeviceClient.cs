@@ -21,11 +21,13 @@ public static class DeviceClient
 
     // ── Discovery ──────────────────────────────────────────────────────────
 
-    public static async Task<List<DeviceInfo>> DiscoverAsync(int udpPort)
+    public static async Task<List<DeviceInfo>> DiscoverAsync(int udpPort,
+        IProgress<string>? progress = null, int timeout = 4)
     {
         var results = new List<DeviceInfo>();
 
         Log.Info($"Discovery: broadcasting BOATRON_DISCOVER on UDP port {udpPort}");
+        progress?.Report("Looking for devices on the network...");
 
         using var udp = new UdpClient();
         udp.EnableBroadcast = true;
@@ -34,7 +36,7 @@ public static class DeviceClient
         var endpoint = new IPEndPoint(IPAddress.Broadcast, udpPort);
         await udp.SendAsync(msg, msg.Length, endpoint);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
         while (true)
         {
             try
@@ -42,11 +44,14 @@ public static class DeviceClient
                 var result = await udp.ReceiveAsync(cts.Token);
                 var json   = Encoding.UTF8.GetString(result.Buffer);
                 Log.Info($"Discovery: response from {result.RemoteEndPoint.Address}: {json}");
-                var info   = JsonSerializer.Deserialize<DeviceInfo>(json, JsonOpts);
+
+                var info = JsonSerializer.Deserialize<DeviceInfo>(json, JsonOpts);
                 if (info != null)
                 {
                     info.IP = result.RemoteEndPoint.Address.ToString();
                     results.Add(info);
+                    var label = string.IsNullOrEmpty(info.Name) ? info.IP : $"{info.Name} ({info.IP})";
+                    progress?.Report($"Found {label}");
                 }
             }
             catch (OperationCanceledException) { break; }
@@ -55,6 +60,7 @@ public static class DeviceClient
         }
 
         Log.Info($"Discovery: found {results.Count} device(s)");
+        progress?.Report(results.Count == 0 ? "No devices responded." : $"Found {results.Count} device(s) — attaching...");
         return results;
     }
 

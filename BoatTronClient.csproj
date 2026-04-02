@@ -8,11 +8,11 @@
     <AssemblyName>BoatTronClient</AssemblyName>
     <RootNamespace>BoatTronClient</RootNamespace>
     <ApplicationManifest>App.manifest</ApplicationManifest>
-    <Version>2.6.0</Version>
+    <Version>2.23.0</Version>
     <Company>DigiTron Sensors</Company>
     <Product>BoatTron Monitor</Product>
     <Copyright>DigiTron Sensors 2026</Copyright>
-    <FileVersion>2.6.0.0</FileVersion>
-    <AssemblyVersion>2.6.0.0</AssemblyVersion>
+    <FileVersion>2.23.0.0</FileVersion>
+    <AssemblyVersion>2.23.0.0</AssemblyVersion>
   </PropertyGroup>
 </Project>

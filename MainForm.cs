@@ -12,23 +12,28 @@ public class MainForm : Form
     private readonly WifiManager    _wifi = new();
     private readonly Dictionary<string, DeviceCard> _cards = new();
     private readonly System.Windows.Forms.Timer _autoRefresh;
-    private bool _scanning;
+    private bool    _scanning;
+    private bool    _inApMode;      // true while connected to a BoatTron AP
+    private string? _apPassword;    // saved so we can connect to the next AP
 
     // ── Controls ───────────────────────────────────────────────────────────
-    private readonly Label  _lblStatus;
-    private readonly Panel  _cardContainer;
+    // [0] = current main status (bold); [1..5] = sub-status history (newest first)
+    private readonly Label[] _statusLines = new Label[6];
+    private readonly Panel   _cardContainer;
+    private Button           _btnScan = null!;   // assigned in BuildToolbar
+    private CancellationTokenSource? _scanCts;
 
     // ── Constructor ────────────────────────────────────────────────────────
     public MainForm()
     {
         _settings = ClientSettings.Load();
 
-        Text          = "BoatTron Monitor  v2.6 — DigiTron Sensors";
-        MinimumSize   = new Size(720, 300);
-        Size          = new Size(820, 500);
+        Text          = "BoatTron Monitor  v2.23 — DigiTron Sensors";
+        MinimumSize   = new Size(860, 540);
+        Size          = new Size(1000, 680);
         StartPosition = FormStartPosition.CenterScreen;
 
-        BuildToolbar(out _lblStatus);
+        BuildToolbar();
         _cardContainer = BuildCardPanel();
 
         // Auto-refresh every 10 minutes
@@ -45,53 +50,89 @@ public class MainForm : Form
     }
 
     // ── Layout ─────────────────────────────────────────────────────────────
-    private void BuildToolbar(out Label lblStatus)
+    private void BuildToolbar()
     {
-        var toolbar = new Panel
+        var btnFont  = new Font("Segoe UI", 9);
+        var statFont = new Font("Segoe UI", 9, FontStyle.Bold);
+        var subFont  = new Font("Segoe UI", 8);
+
+        // ── Thin button bar (Scan Now only) ────────────────────────────────
+        var btnBar   = new Panel { Dock = DockStyle.Top, Height = 1, BackColor = SystemColors.Control };
+        var btnPanel = new Panel { Dock = DockStyle.Left };
+        _btnScan = new Button { Text = "Scan Now", FlatStyle = FlatStyle.System, Font = btnFont };
+        _btnScan.Click += async (_, _) =>
         {
-            Dock   = DockStyle.Top,
-            Height = 40,
+            if (_scanning)
+                _scanCts?.Cancel();
+            else
+                await ScanAsync();
         };
+        btnPanel.Controls.Add(_btnScan);
+        btnBar.Controls.Add(btnPanel);
 
-        // ── Buttons panel docked to the right ─────────────────────────────
-        var btnPanel = new Panel { Dock = DockStyle.Right, Width = 190 };
+        // Right-click anywhere on the form → Settings (removes need for a button)
+        var ctx = new ContextMenuStrip();
+        ctx.Items.Add("Settings…", null, OnOpenSettings);
+        ContextMenuStrip = ctx;
 
-        var btnSettings = MkButton("Settings", 80, OnOpenSettings);
-        var btnScan     = MkButton("Scan Now", 90, async (_, _) => await ScanAsync());
-
-        btnSettings.Location = new Point(100, 6);
-        btnScan.Location     = new Point(4,   6);
-
-        btnPanel.Controls.Add(btnScan);
-        btnPanel.Controls.Add(btnSettings);
-
-        // ── App name docked to the left ───────────────────────────────────
-        var lblAppName = new Label
+        // ── 6-line status panel (centered below buttons) ───────────────────
+        // [0] = current status (bold), [1..5] = sub-status history (newest→oldest)
+        var statusPanel = new Panel { Dock = DockStyle.Top, BackColor = SystemColors.Control };
+        for (int i = 0; i < 6; i++)
         {
-            Text      = "BoatTron Monitor  v2.6",
-            Dock      = DockStyle.Left,
-            Width     = 220,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Padding   = new Padding(8, 0, 0, 0),
-            Font      = new Font("Segoe UI", 11, FontStyle.Bold),
-            ForeColor = Color.FromArgb(26, 58, 106),
-        };
+            _statusLines[i] = new Label
+            {
+                AutoSize  = false,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font      = i == 0 ? statFont : subFont,
+                ForeColor = i == 0 ? Color.FromArgb(30, 30, 30) : Color.Gray,
+            };
+            statusPanel.Controls.Add(_statusLines[i]);
+        }
 
-        // ── Status label fills the middle ─────────────────────────────────
-        lblStatus = new Label
+        Controls.Add(btnBar);
+        Controls.Add(statusPanel);
+
+        // Keep all label widths equal to the status panel's current width
+        void UpdateWidths()
         {
-            Dock      = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Padding   = new Padding(8, 0, 0, 0),
-            ForeColor = Color.Gray,
-            Font      = new Font("Segoe UI", 9),
-        };
+            // Fall back to the form's client width if the panel hasn't sized yet
+            int w = statusPanel.ClientSize.Width > 0
+                        ? statusPanel.ClientSize.Width
+                        : ClientSize.Width;
+            if (w <= 0) return;
+            foreach (var lbl in _statusLines)
+                lbl.Width = w;
+        }
+        statusPanel.Resize += (_, _) => UpdateWidths();
 
-        // Add in reverse dock order: right first, then left, then fill
-        toolbar.Controls.Add(lblStatus);
-        toolbar.Controls.Add(btnPanel);
-        toolbar.Controls.Add(lblAppName);
-        Controls.Add(toolbar);
+        // Compute all sizes from live font metrics — correct at any DPI
+        void RecalculateLayout()
+        {
+            int lineH  = TextRenderer.MeasureText("Mg", statFont).Height;
+            int btnH   = lineH + 10;
+            int margin = Math.Max(8, lineH / 3);
+            int bw     = Math.Max(TextRenderer.MeasureText("Stop Scanning", btnFont).Width, 80) + 24;
+
+            btnBar.Height  = btnH + 2 * margin;
+            btnPanel.Width = 8 + bw + 8;
+            _btnScan.SetBounds(8, (btnBar.Height - btnH) / 2, bw, btnH);
+
+            // Place the 6 labels vertically; widths set by UpdateWidths()
+            int boldH = lineH + 10;
+            int subH  = lineH + 6;
+            int y     = 18;
+            _statusLines[0].SetBounds(0, y, 0, boldH); y += boldH + 8;
+            for (int i = 1; i < 6; i++)
+            {
+                _statusLines[i].SetBounds(0, y, 0, subH); y += subH;
+            }
+            statusPanel.Height = y + 18;
+            UpdateWidths();   // always runs after panel height is set
+        }
+
+        Load                          += (_, _) => RecalculateLayout();
+        btnBar.DpiChangedAfterParent  += (_, _) => RecalculateLayout();
     }
 
     private Panel BuildCardPanel()
@@ -133,22 +174,154 @@ public class MainForm : Form
     {
         if (_scanning) return;
         _scanning = true;
+        _scanCts  = new CancellationTokenSource();
+        if (InvokeRequired) Invoke(() => _btnScan.Text = "Stop Scanning");
+        else _btnScan.Text = "Stop Scanning";
         SetStatus("Scanning...");
         Log.Info("Scan started");
 
+        var progress = new Progress<string>(msg =>
+        {
+            SetSubStatus(msg);
+            Log.Info($"Scan: {msg}");
+        });
+
         try
         {
-            var results = await DeviceClient.DiscoverAsync(_settings.UdpPort);
+            // ── Step 1: try LAN UDP broadcast (4 seconds) ────────────────
+            SetStatus("Scanning...");
+            SetSubStatus("Scanning current network...");
+            var results = await DeviceClient.DiscoverAsync(_settings.UdpPort, progress, timeout: 4);
+
+            // ── Step 2: if nothing on LAN, scan WiFi for BoatTron APs ───
+            if (results.Count == 0)
+            {
+                Log.Info("LAN scan empty — scanning WiFi spectrum for BoatTron APs");
+                SetStatus("Scanning...");
+                SetSubStatus("Scanning wireless spectrum for BoatTron access points...");
+
+                var boatronAps  = new List<string>();
+                int totalFound  = 0;
+                bool boatronFound = false;
+
+                // ── Smooth-scroll queue: display each network for ~1 second ──
+                var scrollQueue = new Queue<string>();
+                var queueLock   = new object();
+                var scrollCts   = new CancellationTokenSource();
+
+                var scrollTask = Task.Run(async () =>
+                {
+                    while (!scrollCts.Token.IsCancellationRequested)
+                    {
+                        string? next = null;
+                        lock (queueLock)
+                        {
+                            if (scrollQueue.Count > 0)
+                                next = scrollQueue.Dequeue();
+                        }
+                        if (next != null)
+                            SetSubStatus(next);
+                        try { await Task.Delay(1000, scrollCts.Token); }
+                        catch (OperationCanceledException) { break; }
+                    }
+                });
+
+                var wifiProgress = new Progress<string>(ssid =>
+                {
+                    totalFound++;
+                    Log.Info($"WiFi scan found: {ssid}");
+                    bool isBoatron = ssid.StartsWith("BoatTron-", StringComparison.OrdinalIgnoreCase) ||
+                                     ssid.StartsWith("BoatTron_", StringComparison.OrdinalIgnoreCase);
+                    if (isBoatron)
+                    {
+                        boatronAps.Add(ssid);
+                        boatronFound = true;
+                        SetStatus($"Found BoatTron AP: {ssid}");
+                        // Clear pending non-BoatTron items; show the AP next; stop scan
+                        lock (queueLock)
+                        {
+                            scrollQueue.Clear();
+                            scrollQueue.Enqueue($">>> {ssid}");
+                        }
+                        Log.Info($"Found BoatTron AP: {ssid}");
+                        _scanCts?.Cancel();
+                    }
+                    else if (!boatronFound)
+                    {
+                        // Queue non-BoatTron networks for 1-second-each display
+                        lock (queueLock)
+                            scrollQueue.Enqueue(ssid);
+                    }
+                });
+
+                // "no new networks" feedback on each empty poll
+                void OnPollComplete(int newCount)
+                {
+                    if (newCount == 0 && !boatronFound)
+                        lock (queueLock)
+                            scrollQueue.Enqueue("(no new networks found)");
+                }
+
+                // Scan runs indefinitely — cancelled by Stop button or AP found
+                var ssids = await WifiManager.ScanSsidsAsync(
+                    wifiProgress, OnPollComplete, _scanCts!.Token);
+
+                // Stop the scroll consumer — don't wait for leftover queue items
+                scrollCts.Cancel();
+                try { await scrollTask; } catch { }
+
+                Log.Info($"WiFi scan complete: {ssids.Count} network(s) found, {boatronAps.Count} BoatTron AP(s)");
+                Log.Info($"All SSIDs: {string.Join(", ", ssids)}");
+
+                if (boatronAps.Count > 0)
+                {
+                    SetSubStatus($"Scan complete — found {boatronAps.Count} BoatTron AP(s)");
+                    var apList = string.Join("\n  • ", boatronAps);
+                    var prompt = $"Wireless scan complete. Found {boatronAps.Count} BoatTron AP(s):\n  • {apList}\n\n" +
+                                 $"Switch networks to connect and scan them?\n" +
+                                 $"(Your original network will be restored after each device is configured.)";
+
+                    var answer = MessageBox.Show(prompt, "Switch to BoatTron AP?",
+                                     MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                    if (answer == DialogResult.Yes)
+                    {
+                        if (PromptPasswordWithRetry("", out var pass))
+                        {
+                            _apPassword = pass!;
+                            var apResults = await ConnectAndDiscoverAsync(boatronAps[0], progress);
+                            results.AddRange(apResults);
+
+                            // Auto-open Configure when connected via AP — don't make user hunt for the card
+                            if (_inApMode && apResults.Count > 0)
+                            {
+                                ApplyScanResults(results);
+                                _scanning = false;
+                                SetStatus($"Connected to {boatronAps[0]} — configuring...");
+                                OnConfigureRequested(this, apResults[0]);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
             ApplyScanResults(results);
+            if (results.Count == 0)
+                SetSubStatus("No devices found.");
         }
         catch (Exception ex)
         {
             Log.Error("Scan failed", ex);
             SetStatus($"Scan error: {ex.Message}");
+            SetSubStatus(ex.Message);
         }
         finally
         {
             _scanning = false;
+            _scanCts?.Dispose();
+            _scanCts = null;
+            _btnScan.Text = "Scan Now";
             Log.Info("Scan finished");
         }
     }
@@ -180,6 +353,114 @@ public class MainForm : Form
         _settings.Save();
         int n = results.Count;
         SetStatus($"{n} device{(n == 1 ? "" : "s")} found — {DateTime.Now:HH:mm:ss}");
+    }
+
+    // ── AP provisioning helpers ────────────────────────────────────────────
+
+    private async Task<List<DeviceInfo>> ConnectAndDiscoverAsync(string ap,
+        IProgress<string>? progress = null)
+    {
+        SetSubStatus($"Connecting to {ap}...");
+        Log.Info($"Connecting to AP: {ap}");
+
+        var connected = await _wifi.ConnectToApAsync(ap, _apPassword!);
+        if (!connected)
+        {
+            Log.Warn($"Could not connect to {ap}");
+            SetSubStatus($"Could not connect to {ap}.");
+            return new List<DeviceInfo>();
+        }
+
+        _inApMode = true;
+        Log.Info($"Connected to {ap}, discovering devices");
+
+        // Try UDP broadcast first
+        SetSubStatus($"Connected to {ap} — scanning...");
+        var results = await DeviceClient.DiscoverAsync(_settings.UdpPort, progress, timeout: 3);
+
+        // UDP often doesn't reach Pico AP subnet — fall back to direct HTTP
+        if (results.Count == 0)
+        {
+            SetSubStatus("Trying direct connection to 192.168.4.1...");
+            Log.Info("UDP returned nothing — trying direct HTTP to 192.168.4.1");
+            try
+            {
+                var info = await DeviceClient.GetInfoAsync("192.168.4.1");
+                results.Add(info);
+                Log.Info($"Direct HTTP found device: {info.Name}");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Direct HTTP to 192.168.4.1 failed: {ex.Message}");
+            }
+        }
+
+        // Still nothing — restore and inform user
+        if (results.Count == 0)
+        {
+            Log.Warn($"No device found on {ap} — restoring network");
+            SetSubStatus("No device found — restoring network...");
+            await _wifi.RestoreAsync();
+            _inApMode = false;
+            MessageBox.Show(
+                $"Connected to {ap} but no BoatTron device responded.\n\n" +
+                "Check the device is powered on and try again.",
+                "Device not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        return results;
+    }
+
+    private async Task ContinueApProvisioningAsync()
+    {
+        SetSubStatus("Restoring original network...");
+        await _wifi.RestoreAsync();
+        _inApMode = false;
+        Log.Info("Network restored — scanning for more BoatTron APs");
+
+        SetSubStatus("Looking for more BoatTron access points...");
+        using var cts2 = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var ssids      = await WifiManager.ScanSsidsAsync(ct: cts2.Token);
+        var boatronAps = ssids.Where(s => s.StartsWith("BoatTron-",
+                             StringComparison.OrdinalIgnoreCase) ||
+                             s.StartsWith("BoatTron_",
+                             StringComparison.OrdinalIgnoreCase)).ToList();
+
+        Log.Info($"Found {boatronAps.Count} remaining BoatTron AP(s)");
+
+        if (boatronAps.Count > 0 && _apPassword != null)
+        {
+            var apList = string.Join("\n  • ", boatronAps);
+            var answer = MessageBox.Show(
+                $"Found {boatronAps.Count} more BoatTron AP(s):\n  • {apList}\n\nConnect to next?",
+                "Next device?", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+            if (answer == DialogResult.Yes)
+            {
+                var progress = new Progress<string>(msg =>
+                {
+                    SetSubStatus(msg);
+                    Log.Info($"AP scan: {msg}");
+                });
+                var results = await ConnectAndDiscoverAsync(boatronAps[0], progress);
+                ApplyScanResults(results);
+                SetStatus($"Connected to {boatronAps[0]} — configure device, then scan for next.");
+                return;
+            }
+        }
+
+        // No more APs or user declined
+        _apPassword = null;
+        SetSubStatus(boatronAps.Count == 0 ? "No more BoatTron APs found." : "");
+        SetStatus($"{_cards.Count} device{(_cards.Count == 1 ? "" : "s")} found — {DateTime.Now:HH:mm:ss}");
+    }
+
+    private async Task AfterDeviceInteractionAsync()
+    {
+        if (_inApMode)
+            await ContinueApProvisioningAsync();
+        else
+            await _wifi.RestoreAsync();
     }
 
     // ── Configure ──────────────────────────────────────────────────────────
@@ -232,7 +513,7 @@ public class MainForm : Form
         }
         finally
         {
-            await _wifi.RestoreAsync();
+            await AfterDeviceInteractionAsync();
         }
     }
 
@@ -261,16 +542,20 @@ public class MainForm : Form
         }
         finally
         {
-            await _wifi.RestoreAsync();
+            await AfterDeviceInteractionAsync();
         }
     }
 
     // ── IP resolution (LAN or AP) ──────────────────────────────────────────
     private async Task<string?> ResolveIpAsync(DeviceInfo info)
     {
-        // If device has a known IP from LAN discovery, use it directly
+        // If device has a known IP from LAN or AP discovery, use it directly
         if (!string.IsNullOrEmpty(info.IP))
             return info.IP;
+
+        // Already connected to its AP from the provisioning scan
+        if (_inApMode)
+            return "192.168.4.1";
 
         // Device is AP-only — offer to switch WiFi to its AP
         var apSsid = $"{info.Brand}-{info.DeviceTag}";
@@ -282,19 +567,12 @@ public class MainForm : Form
                             MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
             return null;
 
-        // Ask for AP password — verify against stored hash
-        var pass = PromptPassword($"AP password for {apSsid}:");
-        if (pass == null) return null;
-
-        if (!_settings.VerifyPassword(pass))
-        {
-            MessageBox.Show("Password does not match the stored hash.",
-                            "Wrong password", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        // Ask for AP password — 5 attempts
+        if (!PromptPasswordWithRetry(apSsid, out var pass))
             return null;
-        }
 
         SetStatus($"Connecting to {apSsid}...");
-        var connected = await _wifi.ConnectToApAsync(apSsid, pass);
+        var connected = await _wifi.ConnectToApAsync(apSsid, pass!);
         if (!connected)
         {
             MessageBox.Show($"Could not connect to {apSsid}.\n" +
@@ -318,14 +596,41 @@ public class MainForm : Form
 
     private void SetStatus(string msg)
     {
-        if (InvokeRequired) Invoke(() => SetStatus(msg));
-        else _lblStatus.Text = msg;
+        if (InvokeRequired) { Invoke(() => SetStatus(msg)); return; }
+        _statusLines[0].Text = msg;
+    }
+
+    private void SetSubStatus(string msg)
+    {
+        if (InvokeRequired) { Invoke(() => SetSubStatus(msg)); return; }
+        // Scroll UP: oldest lines move toward [1], new entry appears at bottom [5]
+        for (int i = 1; i < 5; i++)
+            _statusLines[i].Text = _statusLines[i + 1].Text;
+        _statusLines[5].Text = msg;
     }
 
     private void OnOpenSettings(object? s, EventArgs e)
     {
         using var dlg = new SettingsForm(_settings);
         dlg.ShowDialog(this);
+    }
+
+    private bool PromptPasswordWithRetry(string context, out string? password)
+    {
+        for (int attempt = 1; attempt <= 5; attempt++)
+        {
+            string label = attempt == 1
+                ? $"AP password{(context.Length > 0 ? $" for {context}" : "")}:"
+                : $"AP password — attempt {attempt} of 5:";
+            var pass = PromptPassword(label);
+            if (pass == null) { password = null; return false; }
+            if (_settings.VerifyPassword(pass)) { password = pass; return true; }
+            string remaining = attempt < 5 ? $"{5 - attempt} attempt(s) remaining." : "No more attempts.";
+            MessageBox.Show($"Incorrect password. {remaining}",
+                "Wrong password", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        password = null;
+        return false;
     }
 
     private static string? PromptPassword(string prompt)
@@ -335,14 +640,22 @@ public class MainForm : Form
             Text            = "Password",
             FormBorderStyle = FormBorderStyle.FixedDialog,
             StartPosition   = FormStartPosition.CenterParent,
-            ClientSize      = new Size(360, 110),
+            ClientSize      = new Size(400, 150),
             MaximizeBox     = false,
             MinimizeBox     = false,
         };
-        dlg.Controls.Add(new Label { Text = prompt, Location = new Point(12, 16), Width = 330, AutoSize = false });
-        var tb = new TextBox { PasswordChar = '*', Location = new Point(12, 40), Width = 330, MaxLength = 64 };
-        var ok = new Button { Text = "OK",     Location = new Point(192, 72), Width = 72, Height = 26, DialogResult = DialogResult.OK };
-        var cn = new Button { Text = "Cancel", Location = new Point(272, 72), Width = 72, Height = 26, DialogResult = DialogResult.Cancel };
+        dlg.Controls.Add(new Label
+        {
+            Text     = prompt,
+            Location = new Point(12, 16),
+            Width    = 370,
+            Height   = 36,
+            AutoSize = false,
+            Font     = new Font("Segoe UI", 10),
+        });
+        var tb = new TextBox { PasswordChar = '*', Location = new Point(12, 60), Width = 370, MaxLength = 64, Font = new Font("Segoe UI", 10) };
+        var ok = new Button { Text = "OK",     Location = new Point(204, 106), Width = 84, Height = 32, DialogResult = DialogResult.OK };
+        var cn = new Button { Text = "Cancel", Location = new Point(296, 106), Width = 84, Height = 32, DialogResult = DialogResult.Cancel };
         dlg.Controls.Add(tb); dlg.Controls.Add(ok); dlg.Controls.Add(cn);
         dlg.AcceptButton = ok; dlg.CancelButton = cn;
         return dlg.ShowDialog() == DialogResult.OK ? tb.Text : null;
