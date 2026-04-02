@@ -2,6 +2,12 @@
 
 ---
 
+## [3.0] - 2026-04-02 — branch V3_0
+
+> Start of V3.0 development. All new work from this point forward is on the `V3_0` branch.
+
+---
+
 ## [2.23] - 2026-04-02
 
 ### Fixed — WiFi AP detection: active hardware scan via WlanScan()
